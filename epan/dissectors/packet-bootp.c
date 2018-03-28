@@ -119,12 +119,14 @@
 #include <epan/expert.h>
 #include <epan/uat.h>
 #include <epan/strutil.h>
+#include <epan/network-boot-analysis.h>
 #include <wsutil/str_util.h>
 #include <wsutil/strtoi.h>
 void proto_register_bootp(void);
 void proto_reg_handoff_bootp(void);
 
 static int bootp_dhcp_tap = -1;
+static int bootp_dhcp_boot_tap = -1;
 static int proto_bootp = -1;
 static int hf_bootp_type = -1;
 static int hf_bootp_hw_type = -1;
@@ -6272,6 +6274,9 @@ dissect_bootp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U
 		&hf_bootp_flags_reserved,
 		NULL
 	};
+	network_boot_bootp_event *nbe =
+		(network_boot_bootp_event *)wmem_alloc(wmem_packet_scope(), sizeof(*nbe));
+	nbe->bootfile_name = NULL;
 
 	rfc3396_dns_domain_search_list.total_number_of_block = 0;
 	rfc3396_dns_domain_search_list.tvb_composite	     = NULL;
@@ -6355,9 +6360,14 @@ dissect_bootp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U
 		 */
 		col_set_str(pinfo->cinfo, COL_PROTOCOL, "DHCP");
 
+		nbe->xid = tvb_get_ntohl(tvb, 4);
+		nbe->is_pxe = vendor_class_id != NULL &&
+                              strncmp((const gchar*)vendor_class_id, "PXEClient", strlen("PXEClient")) == 0;
 		col_add_fstr(pinfo->cinfo, COL_INFO, "DHCP %-8s - Transaction ID 0x%x",
-			     dhcp_type, tvb_get_ntohl(tvb, 4));
-		tap_queue_packet( bootp_dhcp_tap, pinfo, dhcp_type);
+			     dhcp_type, nbe->xid);
+		tap_queue_packet(bootp_dhcp_tap, pinfo, dhcp_type);
+	} else {
+		nbe->xid = 0;
 	}
 
 	/*
@@ -6403,6 +6413,7 @@ dissect_bootp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U
 	proto_tree_add_item(bp_tree, hf_bootp_ip_relay, tvb,
 			    24, 4, ENC_BIG_ENDIAN);
 
+	set_address_tvb(&nbe->client_address, htype, hlen, tvb, 28);
 	if (hlen > 0 && hlen <= 16) {
 		if ((htype == ARPHRD_ETHER || htype == ARPHRD_IEEE802)
 		    && hlen == 6)
@@ -6442,9 +6453,13 @@ dissect_bootp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U
 	} else {
 		/* Boot file is optional */
 		if (tvb_get_guint8(tvb, FILE_NAME_OFFSET) != '\0') {
+			guchar buf[FILE_NAME_LEN + 1];
 			proto_tree_add_item(bp_tree, hf_bootp_file, tvb,
 					   FILE_NAME_OFFSET,
 					   FILE_NAME_LEN, ENC_ASCII|ENC_NA);
+			tvb_memcpy(tvb, buf, FILE_NAME_OFFSET, FILE_NAME_LEN);
+			buf[FILE_NAME_LEN] = '\0';
+			nbe->bootfile_name = g_strdup(buf);
 		} else {
 			proto_tree_add_string_format(bp_tree, hf_bootp_file, tvb,
 						   FILE_NAME_OFFSET,
@@ -6494,6 +6509,7 @@ dissect_bootp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U
 		proto_tree_add_item(bp_tree, hf_bootp_option_padding, tvb, voff, eoff - voff, ENC_NA);
 	}
 
+	tap_queue_packet(bootp_dhcp_boot_tap, pinfo, nbe);
 	return tvb_captured_length(tvb);
 }
 
@@ -9209,6 +9225,7 @@ proto_register_bootp(void)
 	proto_register_field_array(proto_bootp, hf, array_length(hf));
 	proto_register_subtree_array(ett, array_length(ett));
 	bootp_dhcp_tap = register_tap("bootp");
+	bootp_dhcp_boot_tap = register_tap("bootp-boot");
 
 	expert_bootp = expert_register_protocol(proto_bootp);
 	expert_register_field_array(expert_bootp, ei, array_length(ei));
