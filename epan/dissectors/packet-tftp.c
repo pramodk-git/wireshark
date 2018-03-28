@@ -35,6 +35,7 @@
 #include <epan/prefs.h>
 #include <epan/tap.h>
 #include <epan/export_object.h>
+#include <epan/tvbuff-int.h>
 
 #include "packet-tftp.h"
 
@@ -357,6 +358,22 @@ static void dissect_tftp_message(tftp_conv_info_t *tftp_info,
                     tvb_format_stringzpad(tvb, offset, i1));
 
     offset += i1;
+
+    if ((guint) offset < tvb->length) {
+      /* The TFTP RRQ request is in windowed mode; We need to get the window size */
+        i1 = tvb_strsize(tvb, offset);
+        offset += i1;
+
+        col_append_fstr(pinfo->cinfo, COL_INFO, ", Window size: %s",
+                      tvb_format_stringzpad(tvb, offset, i1));
+
+        i1 = tvb_strsize(tvb, offset);
+        offset += i1;
+        col_append_fstr(pinfo->cinfo, COL_INFO, ", Blocks: %s",
+                      tvb_format_stringzpad(tvb, offset, i1));
+
+    }
+
 
     tftp_dissect_options(tvb, pinfo,  offset, tftp_tree,
                          opcode, tftp_info);
