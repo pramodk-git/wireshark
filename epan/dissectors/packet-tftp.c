@@ -45,6 +45,8 @@ void proto_register_tftp(void);
 /* Things we may want to remember for a whole conversation */
 typedef struct _tftp_conv_info_t {
   guint16      blocksize;
+  guint16      windowsize;
+  guint16      msftwindow;
   const guint8 *source_file, *destination_file;
 
   /* Sequence analysis */
@@ -271,6 +273,25 @@ tftp_dissect_options(tvbuff_t *tvb, packet_info *pinfo, int offset,
         tftp_info->blocksize = blocksize;
       }
     }
+    if (!g_ascii_strcasecmp((const char *)optionname, "windowsize") &&
+        opcode == TFTP_OACK) {
+      gint windowsize = (gint)strtol((const char *)optionvalue, NULL, 10);
+      if (windowsize < 1 || windowsize > 65535) {
+        expert_add_info(pinfo, NULL, &ei_tftp_blocksize_range);
+      } else {
+        tftp_info->windowsize = windowsize;
+      }
+    }
+    if (!g_ascii_strcasecmp((const char *)optionname, "msftwindow") &&
+        opcode == TFTP_OACK) {
+      gint msftwindow = (gint)strtol((const char *)optionvalue, NULL, 10);
+      if (msftwindow < 1 || msftwindow > 65535) {
+        expert_add_info(pinfo, NULL, &ei_tftp_blocksize_range);
+      } else {
+        tftp_info->msftwindow = msftwindow;
+      }
+    }
+
   }
 }
 
@@ -361,22 +382,6 @@ static void dissect_tftp_message(tftp_conv_info_t *tftp_info,
                     tvb_format_stringzpad(tvb, offset, i1));
 
     offset += i1;
-
-    if ((guint) offset < tvb->length) {
-      /* The TFTP RRQ request is in windowed mode; We need to get the window size */
-        i1 = tvb_strsize(tvb, offset);
-        offset += i1;
-
-        col_append_fstr(pinfo->cinfo, COL_INFO, ", Window size: %s",
-                      tvb_format_stringzpad(tvb, offset, i1));
-
-        i1 = tvb_strsize(tvb, offset);
-        offset += i1;
-        col_append_fstr(pinfo->cinfo, COL_INFO, ", Blocks: %s",
-                      tvb_format_stringzpad(tvb, offset, i1));
-
-    }
-
 
     tftp_dissect_options(tvb, pinfo,  offset, tftp_tree,
                          opcode, tftp_info);
